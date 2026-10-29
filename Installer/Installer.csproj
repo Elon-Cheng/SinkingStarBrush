@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SinkingStarPainter-Setup</AssemblyName>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/../version.json')), '\d+\.\d+\.\d+').Value)</Version>
+    <PublishSingleFile>true</PublishSingleFile><SelfContained>true</SelfContained><RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract><EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <ApplicationManifest>../SinkingStarAssistant/app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../version.json" LogicalName="Painter.Version" />
+    <EmbeddedResource Include="../release-config.json" LogicalName="Painter.ReleaseConfig" />
+    <EmbeddedResource Include="../dist/SinkingStarInGame/dxgi.dll" LogicalName="Payload.dxgi.dll" />
+    <EmbeddedResource Include="../native/vendor/imgui-src/LICENSE.txt" LogicalName="ImGui.License" />
+  </ItemGroup>
+</Project>

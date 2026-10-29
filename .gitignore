@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+dist/
+*.user
+native/build/
+native/vendor/
+native/*.lib
+native/*.exp
+/SinkingStarPainter-Setup.exe
+releases/
+native/version.g.h
