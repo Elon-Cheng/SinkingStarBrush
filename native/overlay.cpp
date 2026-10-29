@@ -12,6 +12,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include "input-policy.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx12.h"
@@ -27,6 +28,7 @@ WNDPROC oldProc;
 ImGuiContext* context;
 std::atomic_bool drawing{false};
 std::atomic_bool settingsOpen{false};
+std::atomic_bool capturedKeys[256]{};
 bool pluginEnabled = true;
 std::string settingsNotice;
 bool visible = true, ready = false, failed = false, strokeActive = false;
@@ -123,8 +125,7 @@ void SetDrawing(bool value) {
     drawing = value; strokeActive = false;
     if (value) {
         visible = true; ReleaseCapture(); ClipCursor(nullptr);
-        // Release keys previously held by the game before taking mouse/keyboard input.
-        if (oldProc) for (int k = 8; k < 256; ++k) if (GetAsyncKeyState(k) & 0x8000) CallWindowProcW(oldProc, gameWindow, WM_KEYUP, k, 0xC0000001);
+        // Keep held movement keys down: drawing only takes over the mouse.
     }
     if (context) ImGui::GetIO().MouseDrawCursor = value;
 }
@@ -135,7 +136,11 @@ void SetSettings(bool value) {
     }
     if(context)ImGui::GetIO().MouseDrawCursor=value;
 }
-SHORT WINAPI FilterKey(int key) { return (drawing||settingsOpen) ? 0 : GetAsyncKeyState(key); }
+bool CapturesKey(int key) {
+    return (key >= 0 && key < 256 && capturedKeys[key]) ||
+        PainterCapturesKey(key, drawing, settingsOpen, (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+}
+SHORT WINAPI FilterKey(int key) { return CapturesKey(key) ? 0 : GetAsyncKeyState(key); }
 void FilterPolling() {
     auto base = reinterpret_cast<BYTE*>(GetModuleHandleW(nullptr));
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
@@ -161,7 +166,17 @@ void FilterPolling() {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     std::lock_guard<std::recursive_mutex> lock(gate);
     if (context) ImGui::SetCurrentContext(context);
-    if (msg == WM_ACTIVATEAPP && !w) { SetSettings(false); }
+    if (msg == WM_ACTIVATEAPP && !w) {
+        SetSettings(false);
+        for (auto& key : capturedKeys) key = false;
+    }
+    const bool keyDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+    const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+    // Remember consumed shortcuts until release, including after Esc/F8 closes drawing.
+    const bool captured = (keyDown || keyUp) && w < 256 &&
+        (CapturesKey((int)w) || w == VK_F8 || (pluginEnabled && w == VK_F9));
+    if (keyDown && captured) capturedKeys[w] = true;
+    if (keyUp && w < 256) capturedKeys[w] = false;
     if (msg == WM_KEYDOWN && !(l & (1LL << 30))) {
         if (w == VK_ESCAPE && settingsOpen) { SetSettings(false); return 0; }
         if (w == VK_F8) { if(!pluginEnabled){SetSettings(!settingsOpen);return 0;} bool next=!drawing;SetSettings(false);SetDrawing(next); return 0; }
@@ -169,12 +184,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         if (w == VK_ESCAPE && drawing) { SetDrawing(false); return 0; }
         if (drawing && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) { if (w == 'Z') { Undo(); return 0; } if (w == 'Y') { Redo(); return 0; } }
     }
-    if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && (w == VK_F8 || (pluginEnabled && w == VK_F9))) return 0;
     if (context && ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+    if (captured) {
+        if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) return DefWindowProcW(hwnd, msg, w, l);
+        return 0;
+    }
     if (drawing||settingsOpen) {
         if (msg == WM_SETCURSOR) { SetCursor(LoadCursorW(nullptr, IDC_CROSS)); return TRUE; }
-        if (msg == WM_INPUT) return DefWindowProcW(hwnd, msg, w, l);
-        if ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || (msg >= WM_KEYFIRST && msg <= WM_KEYLAST)) {
+        if (msg == WM_INPUT) {
+            RAWINPUT input{}; UINT bytes = sizeof(input);
+            const UINT read = GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &input, &bytes, sizeof(RAWINPUTHEADER));
+            if (settingsOpen || read == (UINT)-1 || input.header.dwType == RIM_TYPEMOUSE ||
+                (input.header.dwType == RIM_TYPEKEYBOARD && CapturesKey(input.data.keyboard.VKey)))
+                return DefWindowProcW(hwnd, msg, w, l);
+        }
+        if ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || ((settingsOpen) && msg >= WM_KEYFIRST && msg <= WM_KEYLAST)) {
             // Allow Alt+Tab/Alt+F4 through the OS, never trap application switching.
             if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) return DefWindowProcW(hwnd, msg, w, l);
             return 0;
